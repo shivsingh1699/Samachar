@@ -175,3 +175,50 @@ def test_a_refused_upload_stops_without_retrying(monkeypatch):
     with pytest.raises(SystemExit) as e:
         R.push("https://w.example/pins", "t" * 40, b"{}")
     assert "401" in str(e.value) and len(calls) == 1 and "t" * 40 not in str(e.value)
+
+
+def test_pasted_secrets_with_newlines_are_trimmed(monkeypatch):
+    fake_network(monkeypatch, gkg_row(1))
+    seen = {}
+    monkeypatch.setattr(R, "push", lambda url, token, body: seen.update(url=url, token=token) or 200)
+    monkeypatch.setenv("PUSH_URL", "https://w.example/pins\n")
+    monkeypatch.setenv("PUSH_TOKEN", " " + "k" * 40 + "\n")
+    assert R.main([]) == 0
+    assert seen == {"url": "https://w.example/pins", "token": "k" * 40}
+
+
+def test_unavailable_newest_file_falls_back_to_the_previous_one(monkeypatch, capsys):
+    prev = "20261117084500"
+    asked = []
+    def fetch(url, timeout=60):
+        asked.append(url.rsplit("/", 1)[-1])
+        if url == R.LASTUPDATE:
+            return f"9 a http://data.gdeltproject.org/gdeltv2/{STAMP}.gkg.csv.zip\n".encode()
+        if STAMP in url:
+            raise R.FileNotFound("404")
+        return zipped(gkg_row(1))
+    monkeypatch.setattr(R, "fetch", fetch)
+    monkeypatch.setattr(R, "now_utc", lambda: NOW)
+    sent = {}
+    monkeypatch.setattr(R, "push", lambda url, token, body: sent.update(body=body) or 200)
+    monkeypatch.setenv("PUSH_URL", "https://w.example/pins")
+    monkeypatch.setenv("PUSH_TOKEN", "t" * 40)
+    assert R.main([]) == 0
+    assert asked[-1] == f"{prev}.gkg.csv.zip" and json.loads(sent["body"])["stamp"] == prev
+    assert "not available yet" in capsys.readouterr().err
+
+
+def test_only_a_404_triggers_the_fallback(monkeypatch):
+    import urllib.error
+    monkeypatch.setattr(R.time, "sleep", lambda s: None)
+    def boom(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 500, "x", {}, None)
+    monkeypatch.setattr(R.urllib.request, "urlopen", boom)
+    with pytest.raises(RuntimeError) as e:
+        R.fetch("http://data.gdeltproject.org/gdeltv2/20261117090000.gkg.csv.zip")
+    assert not isinstance(e.value, R.FileNotFound)
+    def nf(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 404, "x", {}, None)
+    monkeypatch.setattr(R.urllib.request, "urlopen", nf)
+    with pytest.raises(R.FileNotFound):
+        R.fetch("http://data.gdeltproject.org/gdeltv2/20261117090000.gkg.csv.zip")
