@@ -222,3 +222,17 @@ def test_only_a_404_triggers_the_fallback(monkeypatch):
     monkeypatch.setattr(R.urllib.request, "urlopen", nf)
     with pytest.raises(R.FileNotFound):
         R.fetch("http://data.gdeltproject.org/gdeltv2/20261117090000.gkg.csv.zip")
+
+
+def test_fingerprint_is_printed_but_never_the_secret(monkeypatch, capsys):
+    import hashlib
+    fake_network(monkeypatch, gkg_row(1))
+    monkeypatch.setattr(R, "push", lambda *a, **k: 200)
+    secret = "abcdef0123456789" * 4
+    monkeypatch.setenv("PUSH_URL", "https://w.example/pins")
+    monkeypatch.setenv("PUSH_TOKEN", secret + "\n")                  # a stray newline must not change the fingerprint
+    assert R.main([]) == 0
+    out = capsys.readouterr()
+    want = hashlib.sha256(secret.encode()).hexdigest()[:8]
+    assert f"token fingerprint {want}  length 64" in out.out
+    assert secret not in out.out + out.err
