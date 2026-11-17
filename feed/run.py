@@ -11,6 +11,7 @@ It never prints the passphrase.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -107,6 +108,10 @@ def main(argv=None) -> int:
     if not a.dry_run and not (url and token):
         print("PUSH_URL and PUSH_TOKEN must be set (or use --dry-run).", file=sys.stderr)
         return 2
+    if token:
+        # First 8 hex characters of SHA-256 plus the length: lets you check the GitHub secret equals the one you meant to
+        # store without printing it. Not reversible for a long random value such as `openssl rand -hex 32`.
+        print(f"token fingerprint {hashlib.sha256(token.encode()).hexdigest()[:8]}  length {len(token)}")
 
     files = P.parse_lastupdate(fetch(LASTUPDATE, 20).decode("utf-8", errors="replace"))
     if "gkg" not in files:
