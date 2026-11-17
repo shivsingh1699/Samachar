@@ -1,0 +1,47 @@
+name: feed
+
+# Runs on a timer and by hand only. No pull_request or push triggers, so nobody else can make it run with the secrets.
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"    # off the busy top of the hour; GitHub may still delay runs
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build the file and print a summary, but do not upload"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write                  # only for the once-a-day status commit that keeps the schedule alive
+
+concurrency:
+  group: feed
+  cancel-in-progress: false
+
+jobs:
+  feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and upload the pins file
+        env:
+          PUSH_URL: ${{ secrets.PUSH_URL }}
+          PUSH_TOKEN: ${{ secrets.PUSH_TOKEN }}
+        run: python3 feed/run.py ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      # GitHub switches scheduled workflows off after 60 days without repository activity.
+      # One tiny commit a day (the date changes once a day, so only the first run of each day commits) prevents that.
+      - name: Daily status commit
+        if: always()
+        run: |
+          mkdir -p status
+          date -u +%F > status/last_day.txt
+          git add status
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "status: $(date -u +%F)"
+            git push || { git pull --rebase && git push; }
+          fi
