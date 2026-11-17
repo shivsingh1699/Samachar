@@ -1,0 +1,10 @@
+# Optional: only needed if you deploy with the wrangler command instead of the dashboard.
+name = "samachar"
+main = "index.js"
+compatibility_date = "2026-11-01"
+
+[[kv_namespaces]]
+binding = "PINS"
+id = "df32a6177efd4030b3618f376b87f0c9"   # samachar-pins; an ID, not a secret
+
+# The passphrase is a secret and is NOT stored here:  wrangler secret put PUSH_TOKEN
