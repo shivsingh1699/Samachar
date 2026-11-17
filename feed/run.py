@@ -17,7 +17,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -26,7 +26,7 @@ import pins as P  # noqa: E402
 LASTUPDATE = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 UA = "Samachar-feed/1.0 (personal, non-commercial; https://github.com/shivsingh1699/Samachar)"
 MAX_BYTES = 350_000            # the Worker refuses anything over 400,000 bytes
-RETRY_WAITS = (3, 10)          # seconds between the three attempts
+RETRY_WAITS = (5, 20)          # seconds between the three attempts
 
 
 def now_utc() -> datetime:
@@ -46,12 +46,22 @@ def _retry(fn, what: str):
     raise RuntimeError(f"{what} failed after {len(RETRY_WAITS) + 1} attempts") from last
 
 
+class FileNotFound(RuntimeError):
+    """The server kept answering 404 for this file (GDELT can list a file a little before it can be downloaded)."""
+
+
 def fetch(url: str, timeout: float = 60) -> bytes:
     def go():
         req = urllib.request.Request(url, headers={"User-Agent": UA})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.read()
-    return _retry(go, f"download {url.rsplit('/', 1)[-1]}")
+    try:
+        return _retry(go, f"download {url.rsplit('/', 1)[-1]}")
+    except RuntimeError as e:
+        c = e.__cause__
+        if isinstance(c, urllib.error.HTTPError) and c.code == 404:
+            raise FileNotFound(str(e)) from e
+        raise
 
 
 def build_payload(stamp: str, pin_list: list, now: datetime) -> tuple[dict, bytes]:
@@ -92,7 +102,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", help="also write the pins file here")
     a = ap.parse_args(argv)
 
-    url, token = os.environ.get("PUSH_URL", ""), os.environ.get("PUSH_TOKEN", "")
+    # A pasted secret often carries a trailing newline or space; HTTP headers cannot, so trim both.
+    url, token = os.environ.get("PUSH_URL", "").strip(), os.environ.get("PUSH_TOKEN", "").strip()
     if not a.dry_run and not (url and token):
         print("PUSH_URL and PUSH_TOKEN must be set (or use --dry-run).", file=sys.stderr)
         return 2
@@ -101,8 +112,16 @@ def main(argv=None) -> int:
     if "gkg" not in files:
         print("GDELT's latest-files list has no article file.", file=sys.stderr)
         return 1
-    stamp = files["gkg"]["stamp"]
-    stats, pin_list = P.parse_gkg(P.unzip_text(fetch(files["gkg"]["url"], 120)), stamp)
+    stamp, gkg_url = files["gkg"]["stamp"], files["gkg"]["url"]
+    try:
+        blob = fetch(gkg_url, 120)
+    except FileNotFound:
+        # The newest file is listed but not downloadable yet: use the one before it (marked stale if it is old).
+        prev = (P.stamp_time(stamp) - timedelta(minutes=15)).strftime("%Y%m%d%H%M%S")
+        print(f"{stamp} is listed but not available yet (404); using the previous file {prev}.", file=sys.stderr)
+        stamp, gkg_url = prev, gkg_url.replace(stamp, prev)
+        blob = fetch(gkg_url, 120)
+    stats, pin_list = P.parse_gkg(P.unzip_text(blob), stamp)
     if stats["articles"] == 0 or not pin_list:
         print(f"Parsed {stats['articles']} articles and {len(pin_list)} pins: not publishing, last good file stays.", file=sys.stderr)
         return 1
