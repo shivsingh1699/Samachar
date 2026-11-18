@@ -1,10 +1,10 @@
 """Samachar: tag each pin with the topics it is about.
 
-Why headlines first: GDELT's theme tags come from the WHOLE web page (menus, sidebars, "related stories"),
-so one article can carry dozens of unrelated themes. A first check of the live feed showed that a theme-only rule
-filed travel guides under conflict and sports under protests. A headline says what the story is about, so the
-headline decides. Theme codes only add a tag when the same topic's codes appear many times in the page
-(THEME_MIN), which means the page really is about it.
+Why headlines only: GDELT's theme tags come from the WHOLE web page (menus, sidebars, "related stories"), so one
+article can carry dozens of unrelated themes. Two live checks showed it: a theme-only rule filed travel guides under
+conflict, and even when a topic's codes had to appear 4+ times, about 4 in 5 of the tags that came from themes alone were
+wrong (a school report card as "disasters", a hockey story as "politics"). So themes are OFF (USE_THEMES = False) and
+only the headline decides. The theme code is kept so it can be tried again later on real data.
 
 Standard library only. English headlines only; other languages usually end up with no tag, never a wrong one.
 """
@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import re
 
-THEME_MIN = 4   # whole-code occurrences of one topic needed before themes alone may add a tag (a cautious guess: tune on real data)
+USE_THEMES = False   # off: measured to be wrong about 4 times in 5 on live data (see the note above)
+THEME_MIN = 4        # only used when USE_THEMES is True
 
 # Single main topic, first match wins. "india" is a cross-cutting tag and is never the main one.
 PRIMARY_ORDER = ["festivals", "conflict", "disasters", "protests", "health", "economy", "policy",
@@ -34,7 +35,7 @@ HEADLINE = {
     "conflict": _rx("wars?", "warfare", "air ?strikes?", "missiles?", "drones? strikes?", "troops?", "military", "army", "soldiers?",
                     "cease-?fire", "hostages?", "invasion", "invade[sd]?", "bombing", "bombed", "shelling", "front ?lines?",
                     "rebels?", "militants?", "terror\\w*", "nato", "hamas", "hezbollah", "houthis?", "taliban", "gaza", "pentagon",
-                    "ukrain\\w+", "crimea", "navy", "air force", "warships?", "aircraft carriers?", "nuclear weapons?", "insurgents?", "genocide"),
+                    "ukrain\\w+", "crimea", "drone attacks?", "dirty bomb", "navy", "air force", "warships?", "aircraft carriers?", "nuclear weapons?", "insurgents?", "genocide"),
     "disasters": _rx("earthquakes?", "quakes?", "tsunamis?", "floods?", "flooding", "flooded", "hurricanes?", "typhoons?", "cyclones?",
                      "tornad(?:o|oes)", "wildfires?", "bushfires?", "landslides?", "avalanches?", "droughts?", "heat ?waves?",
                      "storms?", "blizzards?", "volcano(?:es)?", "eruption", "plane crash", "train derailment", "building collapse",
@@ -56,7 +57,7 @@ HEADLINE = {
     "policy": _rx("laws?", "legislation", "regulations?", "regulators?", "regulatory", "reforms?", "policy", "policies",
                   "new rules?", "bans?", "banned", "visas?", "immigration", "mandates?", "subsid(?:y|ies)", "crackdown",
                   "ruling", "court rules?", "supreme court", "amendments?", "legislat\\w+", "tax (?:cuts?|hikes?|rules?)"),
-    "politics": _rx("elections?", "voters?", "voting", "parliament\\w*", "congress", "senate", "senators?", "lawmakers?", "prime minister",
+    "politics": _rx("elections?", "voters?", "voting", "parliament\\w*", "congress", "senate", "lawmakers?", "prime minister",
                     "president\\w*", "minister\\w*", "ministry", "(?-i:PM)", "government", "opposition", "coalition", "referendum", "governor", "mayor",
                     "summit", "diplomat\\w*", "sanctions?", "treaty", "white house", "kremlin", "trump", "putin", "modi",
                     "xi jinping", "takaichi", "starmer", "macron", "zelensky", "lok sabha", "bjp", "democrats?", "republicans?"),
@@ -105,9 +106,10 @@ def theme_counts(codes: list[str]) -> dict[str, int]:
 def tags_for(title: str, v2themes: str = "", v1themes: str = "", cc: str = "") -> list[str]:
     """Every topic the story is about, in TAG_ORDER. Headline words always count; themes need THEME_MIN hits."""
     found = {t for t, rx in HEADLINE.items() if rx.search(title or "")}
-    for t, n in theme_counts(theme_codes(v2themes, v1themes)).items():
-        if n >= THEME_MIN:
-            found.add(t)
+    if USE_THEMES:
+        for t, n in theme_counts(theme_codes(v2themes, v1themes)).items():
+            if n >= THEME_MIN:
+                found.add(t)
     if cc == "IN":
         found.add("india")
     return [t for t in TAG_ORDER if t in found]
