@@ -12,11 +12,14 @@ import sys
 import zipfile
 from datetime import datetime, timezone
 
+import topics as T
+
 SCHEMA = "hub-news-pins-v1"
 CREDIT = "The GDELT Project, https://www.gdeltproject.org/"
 PINS_PER_FILE = 400
 TITLE_MAX = 300
 STALE_AFTER_MIN = 60          # a source file older than this is marked stale
+TOPIC_QUOTA = 30              # each topic is guaranteed up to this many of the pins (before the rest are filled by place precision)
 
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
@@ -24,16 +27,6 @@ csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 GKG = {"id": 0, "date": 1, "source": 3, "url": 4, "themes": 7, "v2themes": 8, "locations": 9, "v2locations": 10,
        "tone": 15, "extras": 26}
 GKG_COLS = 27
-# theme prefixes -> topic (first match wins, in this order)
-THEME_TOPIC = [
-    ("disasters", ("NATURAL_DISASTER", "DISASTER", "TAX_DISEASE_", "MANMADE_DISASTER", "ENV_CLIMATECHANGE")),
-    ("conflict", ("ARMEDCONFLICT", "KILL", "TERROR", "MILITARY", "WB_2433_CONFLICT", "CRISISLEX_C07_SAFETY", "SECURITY_SERVICES")),
-    ("protests", ("PROTEST", "STRIKE", "UNREST_")),
-    ("health", ("HEALTH", "MEDICAL", "WB_621_HEALTH", "TAX_DISEASE", "EPIDEMIC", "VACCIN")),
-    ("economy", ("ECON_", "WB_1104_MACROECONOMIC", "TAX_ECON_PRICE", "WB_442_INFLATION", "FUELPRICES", "STOCK", "CENTRAL_BANK", "TRADE")),
-    ("science_tech", ("CYBER_ATTACK", "WB_133_INFORMATION_AND_COMMUNICATION", "SCIENCE", "TECHNOLOGY", "AI_", "SPACE")),
-    ("politics", ("ELECTION", "LEGISLATION", "GENERAL_GOVERNMENT", "LEADER", "DIPLOMACY", "SANCTION", "TAX_FNCACT_PRESIDENT")),
-]
 
 
 def stamp_time(stamp: str) -> datetime:
@@ -71,13 +64,6 @@ def _f(x):
         return float(x)
     except (TypeError, ValueError):
         return None
-
-
-def topic_of(themes: str) -> str:
-    for topic, prefixes in THEME_TOPIC:
-        if any(p in themes for p in prefixes):
-            return topic
-    return "other"
 
 
 def first_location(v2loc: str, v1loc: str):
@@ -123,36 +109,54 @@ def safe_url(u: str):
 
 
 def parse_gkg(text: str, stamp: str):
-    """-> (stats, pins). Pins: one per place+headline, most specific place first, capped."""
+    """-> (stats, pins). One pin per distinct headline, most specific place first, topic quotas, capped at PINS_PER_FILE."""
     n = with_loc = with_title = bad = 0
-    topics: dict[str, int] = {}
-    pins = []
+    pool = []
     for r in _rows(text):
         if len(r) != GKG_COLS:
             bad += 1
             continue
         n += 1
         loc = first_location(r[GKG["v2locations"]], r[GKG["locations"]])
+        site = clean_text(r[GKG["source"]], 80)
         title = page_title(r[GKG["extras"]])
+        if title:
+            title = T.strip_site_suffix(title, site) or None
         with_title += title is not None
-        topic = topic_of(r[GKG["v2themes"]] or r[GKG["themes"]])
-        topics[topic] = topics.get(topic, 0) + 1
         if not loc:
             continue
         with_loc += 1
         url = safe_url(r[GKG["url"]])
         if title and url:
+            tags = T.tags_for(title, r[GKG["v2themes"]], r[GKG["themes"]], loc["cc"])
             tone = _f((r[GKG["tone"]] or "").split(",")[0])
-            pins.append({"t": title, "u": url, "s": clean_text(r[GKG["source"]], 80), "topic": topic,
+            pool.append({"t": title, "u": url, "s": site, "topic": T.main_topic(tags), "topics": tags,
                          "tone": round(tone, 1) if tone is not None else None, **loc})
-    seen, kept = set(), []
-    for p in sorted(pins, key=lambda p: p["precision"] not in ("3", "4")):
-        key = (p["t"].lower()[:80], p["lat"], p["lon"])
+    seen, uniq = set(), []
+    for p in sorted(pool, key=lambda p: p["precision"] not in ("3", "4")):
+        key = T.dedupe_key(p["t"], p["lat"], p["lon"])
         if key in seen:
             continue
         seen.add(key)
-        kept.append(p)
+        uniq.append(p)
+    kept, taken, per_tag = [], set(), {}
+    for i, p in enumerate(uniq):          # first pass: make sure no topic is crowded out by the loudest ones
         if len(kept) >= PINS_PER_FILE:
             break
-    return {"articles": n, "with_location": with_loc, "with_title": with_title, "bad_rows": bad, "topics": topics,
-            "pins": len(kept)}, kept
+        if any(per_tag.get(t, 0) < TOPIC_QUOTA for t in p["topics"]):
+            kept.append(i)
+            taken.add(i)
+            for t in p["topics"]:
+                per_tag[t] = per_tag.get(t, 0) + 1
+    for i in range(len(uniq)):            # second pass: fill what is left, most precise places first
+        if len(kept) >= PINS_PER_FILE:
+            break
+        if i not in taken:
+            kept.append(i)
+    chosen = [uniq[i] for i in sorted(kept)]
+    counts: dict[str, int] = {}
+    for p in chosen:
+        for t in p["topics"] or ["other"]:
+            counts[t] = counts.get(t, 0) + 1
+    return {"articles": n, "with_location": with_loc, "with_title": with_title, "bad_rows": bad, "topics": counts,
+            "pins": len(chosen)}, chosen
