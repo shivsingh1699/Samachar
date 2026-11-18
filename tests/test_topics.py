@@ -37,17 +37,34 @@ def test_ai_is_case_sensitive_but_other_words_are_not():
     assert T.tags_for("Said the mail was late") == []
 
 
-def test_themes_alone_need_several_whole_code_hits():
+def test_theme_codes_are_ignored_by_default():
+    # Live data: these stories carried many theme codes from page menus and sidebars, and the tags were wrong.
+    assert T.USE_THEMES is False
+    assert T.tags_for("Local update", "PROTEST,10;PROTEST,50;PROTEST,90;PROTEST,120;PROTEST,130;") == []
+    assert T.tags_for("Waunakee leads Dane County districts in school report card scores", "NATURAL_DISASTER,1;" * 9) == []
+
+
+def test_theme_machinery_still_works_when_switched_on(monkeypatch):
+    monkeypatch.setattr(T, "USE_THEMES", True)
     three = "PROTEST,10;PROTEST,50;PROTEST,90;"
-    four = three + "PROTEST,120;"
     assert T.tags_for("Local update", three) == []
-    assert T.tags_for("Local update", four) == ["protests"]
-    # whole codes only: 'TAX_FNCACT_SKILLS' must not count as the conflict code KILL, 'AI_' text must not count as tech
+    assert T.tags_for("Local update", three + "PROTEST,120;") == ["protests"]
+    # whole codes only: 'TAX_FNCACT_SKILLS' must not count as the conflict code KILL
     assert T.tags_for("Local update", "TAX_FNCACT_SKILLS,1;" * 6) == []
     # disease codes belong to health, not disasters
     assert T.tags_for("Local update", "TAX_DISEASE_CHOLERA,1;" * 5) == ["health"]
     # old-style themes (no offsets) still work
     assert T.tags_for("Local update", "", "ARMEDCONFLICT;TERROR;MILITARY;ARMEDCONFLICT;") == ["conflict"]
+
+
+def test_live_false_positives_stay_untagged():
+    for h in ["Linus Ullmark stymies Jets as Senators continue hot streak",
+              "Snapped! Rotorua Youths Caught Committing Crimes On Camera",
+              "Waymo Pulls Vehicles From All U.S. Freeways",
+              "Redding Chico Eureka"]:
+        assert T.tags_for(h) == [], h
+    assert T.tags_for("Kuwait air defences confront hostile drone attacks") == ["conflict"]
+    assert T.tags_for("Rubio dismisses Iranian 'dirty bomb' plot")[0] == "conflict"
 
 
 def test_site_suffixes_are_removed_only_when_they_are_the_outlet():
