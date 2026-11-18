@@ -28,6 +28,7 @@ LASTUPDATE = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 UA = "Samachar-feed/1.0 (personal, non-commercial; https://github.com/shivsingh1699/Samachar)"
 MAX_BYTES = 350_000            # the Worker refuses anything over 400,000 bytes
 RETRY_WAITS = (5, 20)          # seconds between the three attempts
+MAX_FALLBACK_FILES = 3          # if the newest file is missing, try up to this many 15-minute slots back
 
 
 def now_utc() -> datetime:
@@ -118,14 +119,21 @@ def main(argv=None) -> int:
         print("GDELT's latest-files list has no article file.", file=sys.stderr)
         return 1
     stamp, gkg_url = files["gkg"]["stamp"], files["gkg"]["url"]
-    try:
-        blob = fetch(gkg_url, 120)
-    except FileNotFound:
-        # The newest file is listed but not downloadable yet: use the one before it (marked stale if it is old).
-        prev = (P.stamp_time(stamp) - timedelta(minutes=15)).strftime("%Y%m%d%H%M%S")
-        print(f"{stamp} is listed but not available yet (404); using the previous file {prev}.", file=sys.stderr)
-        stamp, gkg_url = prev, gkg_url.replace(stamp, prev)
-        blob = fetch(gkg_url, 120)
+    blob = None
+    for step in range(MAX_FALLBACK_FILES + 1):
+        try:
+            blob = fetch(gkg_url, 120)
+            break
+        except FileNotFound:
+            # Listed but not downloadable: either not published yet, or GDELT skipped that 15-minute slot for good.
+            # Step back one slot at a time (the result is marked stale if it ends up old).
+            if step == MAX_FALLBACK_FILES:
+                print(f"{stamp} and the {MAX_FALLBACK_FILES} files before it are all unavailable (404): not publishing, "
+                      "last good file stays.", file=sys.stderr)
+                return 1
+            prev = (P.stamp_time(stamp) - timedelta(minutes=15)).strftime("%Y%m%d%H%M%S")
+            print(f"{stamp} is listed but not available (404); trying the previous file {prev}.", file=sys.stderr)
+            stamp, gkg_url = prev, gkg_url.replace(stamp, prev)
     stats, pin_list = P.parse_gkg(P.unzip_text(blob), stamp)
     if stats["articles"] == 0 or not pin_list:
         print(f"Parsed {stats['articles']} articles and {len(pin_list)} pins: not publishing, last good file stays.", file=sys.stderr)
