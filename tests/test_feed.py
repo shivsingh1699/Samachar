@@ -205,7 +205,43 @@ def test_unavailable_newest_file_falls_back_to_the_previous_one(monkeypatch, cap
     monkeypatch.setenv("PUSH_TOKEN", "t" * 40)
     assert R.main([]) == 0
     assert asked[-1] == f"{prev}.gkg.csv.zip" and json.loads(sent["body"])["stamp"] == prev
-    assert "not available yet" in capsys.readouterr().err
+    assert "not available (404)" in capsys.readouterr().err
+
+
+def _missing_files_network(monkeypatch, missing):
+    """GDELT lists STAMP; every stamp in `missing` answers 404, any other file is a good one."""
+    asked = []
+    def fetch(url, timeout=60):
+        asked.append(url.rsplit("/", 1)[-1])
+        if url == R.LASTUPDATE:
+            return f"9 a http://data.gdeltproject.org/gdeltv2/{STAMP}.gkg.csv.zip\n".encode()
+        if any(m in url for m in missing):
+            raise R.FileNotFound("404")
+        return zipped(gkg_row(1))
+    monkeypatch.setattr(R, "fetch", fetch)
+    monkeypatch.setattr(R, "now_utc", lambda: NOW)
+    monkeypatch.setenv("PUSH_URL", "https://w.example/pins")
+    monkeypatch.setenv("PUSH_TOKEN", "t" * 40)
+    return asked
+
+
+def test_two_missing_files_in_a_row_still_find_an_older_one(monkeypatch):
+    # Seen live on 18 Nov: GDELT skipped a 15-minute slot, so the newest file AND the one before it were both 404.
+    sent = {}
+    monkeypatch.setattr(R, "push", lambda url, token, body: sent.update(body=body) or 200)
+    _missing_files_network(monkeypatch, [STAMP, "20261117084500"])
+    assert R.main([]) == 0
+    assert json.loads(sent["body"])["stamp"] == "20261117083000"
+
+
+def test_all_recent_files_missing_publishes_nothing(monkeypatch, capsys):
+    called = []
+    monkeypatch.setattr(R, "push", lambda *a, **k: called.append(1) or 200)
+    missing = [STAMP, "20261117084500", "20261117083000", "20261117081500"]
+    asked = _missing_files_network(monkeypatch, missing)
+    assert R.main([]) == 1 and not called
+    assert len([a for a in asked if "gkg" in a]) == R.MAX_FALLBACK_FILES + 1
+    assert "last good file stays" in capsys.readouterr().err
 
 
 def test_only_a_404_triggers_the_fallback(monkeypatch):
