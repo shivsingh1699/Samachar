@@ -24,12 +24,12 @@ This repository holds no personal or financial data and must never hold any. The
 
 ```
 { "schema", "credit", "source", "stamp", "source_time", "fetched_at", "source_age_min", "stale", "count",
-  "pins": [ { "t": headline, "u": link, "s": site, "topic", "tone", "name", "cc", "lat", "lon", "precision" } ] }
+  "pins": [ { "t": headline, "u": link, "s": site, "topic", "topics", "tone", "name", "cc", "lat", "lon", "precision" } ] }
 ```
 
 Rules for whoever displays it:
 - **Headlines, links and site names are untrusted text from the open web.** Show them with `textContent`, never `innerHTML`. Open links only if they start with `http://` or `https://`.
-- Show the data's time (`source_time`) on the map and the credit line. Show a warning if `stale` is true **or** if `fetched_at` is more than about 45 minutes old (the job itself may have stopped).
+- Show the data's time (`source_time`) on the map and the credit line. Show a warning if `stale` is true **or** if `fetched_at` is more than 3 hours old (the job itself may have stopped). GitHub's schedule delivers about one run an hour, not every 15 minutes; keep the 3 hours as one named setting.
 - `cc` is a FIPS 10-4 country code, not ISO (`CH` is China). India is `IN` in both.
 - `source_age_min` can be slightly negative: GDELT's file stamps have run a few minutes ahead of the clock in testing. It is recorded, not relied on.
 - If the job fails, nothing is uploaded and the Worker keeps serving the last good file.
@@ -49,3 +49,18 @@ Rules for whoever displays it:
 - GitHub: public repositories have free Actions minutes; scheduled runs can be delayed under load; schedules switch off after 60 days without repository activity (the daily status commit exists for this).
 - Cloudflare Workers: 100,000 requests a day and 10 ms CPU per request, so the Worker never parses the JSON. KV: 1,000 writes a day (this job uses about 96).
 - The passphrase can only replace this one stored file. If it leaks, change it in both places.
+
+## Topics
+
+Each pin has `topics` (every topic the headline is about, possibly empty) and `topic` (the main one, or `other`).
+Values: `festivals`, `conflict`, `disasters`, `protests`, `health`, `economy`, `policy`, `politics`, `science_tech`,
+`lifestyle`, plus the cross-cutting `india` (set when the headline names India or the place is in India; never the main topic).
+
+- The **headline decides**. GDELT's theme tags come from the whole web page, so they pick up menus and related links; a
+  first live check filed travel guides under conflict. Theme codes only add a tag when the same topic's codes appear at
+  least `THEME_MIN` times in the page (a cautious guess; tune it on real data).
+- English headlines only. Other languages usually get no tag, never a wrong one.
+- Each topic is guaranteed up to `TOPIC_QUOTA` of the 400 pins, so quiet topics are not crowded out.
+- One pin per headline: the same story from many local sites is shown once, with the outlet name (`| The Rural`) removed.
+- Readers must not assume every pin has a topic: `topics` can be `[]` and `topic` is then `other`.
+- Edit the word lists in `feed/topics.py`; `tests/test_topics.py` shows what each rule must and must not match.
