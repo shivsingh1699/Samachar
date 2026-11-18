@@ -56,11 +56,17 @@ Each pin has `topics` (every topic the headline is about, possibly empty) and `t
 Values: `festivals`, `conflict`, `disasters`, `protests`, `health`, `economy`, `policy`, `politics`, `science_tech`,
 `lifestyle`, plus the cross-cutting `india` (set when the headline names India or the place is in India; never the main topic).
 
-- The **headline decides**. GDELT's theme tags come from the whole web page, so they pick up menus and related links; a
-  first live check filed travel guides under conflict. Theme codes only add a tag when the same topic's codes appear at
-  least `THEME_MIN` times in the page (a cautious guess; tune it on real data).
+- The **headline decides**, and only the headline. GDELT's theme tags come from the whole web page, so they pick up menus
+  and related links. Two live checks showed it: about 4 in 5 of the tags that came from themes alone were wrong, so themes are
+  switched off (`USE_THEMES = False` in `feed/topics.py`) and the code is kept for another try on real data.
 - English headlines only. Other languages usually get no tag, never a wrong one.
 - Each topic is guaranteed up to `TOPIC_QUOTA` of the 400 pins, so quiet topics are not crowded out.
 - One pin per headline: the same story from many local sites is shown once, with the outlet name (`| The Rural`) removed.
 - Readers must not assume every pin has a topic: `topics` can be `[]` and `topic` is then `other`.
 - Edit the word lists in `feed/topics.py`; `tests/test_topics.py` shows what each rule must and must not match.
+
+## If GDELT's newest file is missing
+
+GDELT sometimes lists a file that cannot be downloaded (not published yet, or the 15-minute slot was skipped for good).
+The job then steps back one slot at a time, up to `MAX_FALLBACK_FILES` (3) slots. If all of them are missing it uploads
+nothing and exits red; the last good file stays on the Worker. The `stale` flag and `source_age_min` say how old the data is.
